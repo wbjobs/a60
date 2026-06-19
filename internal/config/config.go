@@ -54,11 +54,28 @@ type Config struct {
 	LevelPattern string           `yaml:"level_pattern" json:"level_pattern"`
 	Detection    DetectionRules   `yaml:"detection" json:"detection"`
 	Output       OutputConfig     `yaml:"output" json:"output"`
+	Report       ReportConfig     `yaml:"report" json:"report"`
+	Watch        WatchConfig      `yaml:"watch" json:"watch"`
 }
 
 type OutputConfig struct {
 	ShowHostPrefix bool `yaml:"show_host_prefix" json:"show_host_prefix"`
 	ColorEnabled   bool `yaml:"color_enabled" json:"color_enabled"`
+}
+
+type ReportConfig struct {
+	OutputPath    string `yaml:"output_path" json:"output_path"`
+	IncludeCharts bool   `yaml:"include_charts" json:"include_charts"`
+	IncludeRaw    bool   `yaml:"include_raw_logs" json:"include_raw_logs"`
+	Title         string `yaml:"title" json:"title"`
+}
+
+type WatchConfig struct {
+	IntervalSeconds int    `yaml:"interval_seconds" json:"interval_seconds"`
+	Daemon          bool   `yaml:"daemon" json:"daemon"`
+	PidFile         string `yaml:"pid_file" json:"pid_file"`
+	LogFile         string `yaml:"log_file" json:"log_file"`
+	AlertCommand    string `yaml:"alert_command" json:"alert_command"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -142,6 +159,23 @@ func validateAndSetDefaults(cfg *Config) error {
 	}
 	if cfg.Output.ShowHostPrefix {
 		cfg.Output.ShowHostPrefix = true
+	}
+
+	if cfg.Report.OutputPath == "" {
+		cfg.Report.OutputPath = "log_report.html"
+	}
+	if cfg.Report.Title == "" {
+		cfg.Report.Title = "日志异常检测报告"
+	}
+	if !cfg.Report.IncludeCharts {
+		cfg.Report.IncludeCharts = true
+	}
+
+	if cfg.Watch.IntervalSeconds <= 0 {
+		cfg.Watch.IntervalSeconds = 30
+	}
+	if cfg.Watch.PidFile == "" {
+		cfg.Watch.PidFile = "logaggregator.pid"
 	}
 
 	return nil

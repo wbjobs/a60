@@ -97,3 +97,20 @@ detection:
 output:
   show_host_prefix: true
   color_enabled: true
+
+# 报告配置
+report:
+  output_path: log_report.html
+  title: 日志异常检测报告
+  include_charts: true
+  include_raw_logs: true
+
+# 监控配置
+watch:
+  interval_seconds: 30
+  daemon: false
+  pid_file: logaggregator.pid
+  log_file: logaggregator.log
+  # 告警命令，支持以下变量替换:
+  # {{severity}}, {{rule}}, {{message}}, {{server}}, {{level}}, {{timestamp}}
+  # alert_command: 'echo "[{{severity}}] {{rule}} on {{server}}: {{message}}" | mail -s "Log Alert" admin@example.com'
