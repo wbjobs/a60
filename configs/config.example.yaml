@@ -1,0 +1,88 @@
+time_window_minutes: 15
+
+level_pattern: '\b(INFO|WARN|WARNING|ERROR|FATAL|DEBUG)\b'
+
+time_formats:
+  - regex: '\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}'
+    layout: '2006-01-02T15:04:05'
+    group: 0
+  - regex: '\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}'
+    layout: '2006/01/02 15:04:05'
+    group: 0
+  - regex: '[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}'
+    layout: 'Jan  2 15:04:05'
+    group: 0
+
+servers:
+  - name: web-server-1
+    host: 192.168.1.101
+    port: 22
+    user: appuser
+    password: your_password_here
+    log_paths:
+      - /var/log/app/*.log
+      - /var/log/nginx/*.log
+
+  - name: web-server-2
+    host: 192.168.1.102
+    port: 22
+    user: appuser
+    key_file: ~/.ssh/deploy_key
+    log_paths:
+      - /var/log/app/*.log
+
+  - name: db-server
+    host: 192.168.1.201
+    port: 22
+    user: dba
+    password: secure_password
+    log_paths:
+      - /var/log/mysql/*.log
+
+detection:
+  keyword_matches:
+    - name: 数据库异常
+      keywords:
+        - Connection refused
+        - timeout
+        - deadlock
+        - SQLException
+        - connection reset
+      color: red
+
+    - name: 内存问题
+      keywords:
+        - OutOfMemory
+        - OOM
+        - memory leak
+        - HeapDump
+      color: purple
+
+    - name: 鉴权失败
+      keywords:
+        - 401 Unauthorized
+        - 403 Forbidden
+        - invalid token
+        - authentication failed
+      color: yellow
+
+    - name: 服务异常
+      keywords:
+        - NullPointerException
+        - StackOverflow
+        - panic
+        - Segmentation fault
+      color: red
+
+  consecutive_levels:
+    - name: 连续ERROR告警
+      level: ERROR
+      count: 3
+
+    - name: 连续WARN警告
+      level: WARN
+      count: 10
+
+output:
+  show_host_prefix: true
+  color_enabled: true
