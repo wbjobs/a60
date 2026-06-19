@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"time"
@@ -22,17 +23,19 @@ const (
 )
 
 type ParsedLogEntry struct {
-	ServerName  string
-	Host        string
-	FilePath    string
-	LineNumber  int64
-	RawLine     string
-	Timestamp   time.Time
-	HasTime     bool
-	Level       LogLevel
-	Message     string
+	ServerName   string
+	Host         string
+	FilePath     string
+	LineNumber   int64
+	RawLine      string
+	Timestamp    time.Time
+	OrigTimestamp time.Time
+	HasTime      bool
+	Level        LogLevel
+	Message      string
 	MatchedRules []string
-	IsAlert     bool
+	IsAlert      bool
+	TimeOffset   time.Duration
 }
 
 func NormalizeLevel(level string) LogLevel {
@@ -66,6 +69,8 @@ func ParseLogs(rawEntries []logpull.RawLogEntry, cfg *config.Config) []ParsedLog
 	parsed := make([]ParsedLogEntry, 0, len(rawEntries))
 	cutoff := time.Now().Add(-time.Duration(cfg.TimeWindow) * time.Minute)
 
+	offsetInfo := make(map[string]time.Duration)
+
 	for _, raw := range rawEntries {
 		entry := ParsedLogEntry{
 			ServerName: raw.ServerName,
@@ -74,6 +79,11 @@ func ParseLogs(rawEntries []logpull.RawLogEntry, cfg *config.Config) []ParsedLog
 			LineNumber: raw.LineNumber,
 			RawLine:    raw.Line,
 			Message:    raw.Line,
+			TimeOffset: raw.TimeOffset,
+		}
+
+		if raw.TimeOffset != 0 {
+			offsetInfo[raw.ServerName] = raw.TimeOffset
 		}
 
 		for i, tf := range cfg.TimeFormats {
@@ -87,7 +97,12 @@ func ParseLogs(rawEntries []logpull.RawLogEntry, cfg *config.Config) []ParsedLog
 							t = time.Date(now.Year(), t.Month(), t.Day(),
 								t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), now.Location())
 						}
-						entry.Timestamp = t
+						entry.OrigTimestamp = t
+						if raw.TimeOffset != 0 {
+							entry.Timestamp = t.Add(-raw.TimeOffset)
+						} else {
+							entry.Timestamp = t
+						}
 						entry.HasTime = true
 						break
 					}
@@ -96,7 +111,9 @@ func ParseLogs(rawEntries []logpull.RawLogEntry, cfg *config.Config) []ParsedLog
 		}
 
 		if !entry.HasTime {
-			entry.Timestamp = time.Now()
+			now := time.Now()
+			entry.Timestamp = now
+			entry.OrigTimestamp = now
 		}
 
 		if !entry.Timestamp.Before(cutoff) {
@@ -109,6 +126,15 @@ func ParseLogs(rawEntries []logpull.RawLogEntry, cfg *config.Config) []ParsedLog
 			}
 			parsed = append(parsed, entry)
 		}
+	}
+
+	if len(offsetInfo) > 0 {
+		fmt.Println()
+		fmt.Println("🕐 时间偏移应用情况:")
+		for server, offset := range offsetInfo {
+			fmt.Printf("   %-20s: %v\n", server, offset)
+		}
+		fmt.Println()
 	}
 
 	sort.Slice(parsed, func(i, j int) bool {

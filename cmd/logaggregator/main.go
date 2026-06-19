@@ -222,6 +222,14 @@ servers:
     password: your_password
     # 或者使用密钥文件认证
     # key_file: ~/.ssh/id_rsa
+    # 连接重试次数（可选，默认2次）
+    connect_retries: 2
+    # 连接超时秒数（可选，默认10秒）
+    connect_timeout_seconds: 10
+    # 自动探测与该服务器的时间偏移（可选，默认false）
+    auto_time_sync: false
+    # 手动设置时间偏移秒数（可选，正数表示服务器比本地快，负数表示慢）
+    # time_offset_seconds: -5
     log_paths:
       - /var/log/app/*.log
       - /var/log/nginx/*.log
@@ -231,6 +239,9 @@ servers:
     port: 22
     user: appuser
     key_file: ~/.ssh/deploy_key
+    connect_retries: 3
+    connect_timeout_seconds: 15
+    auto_time_sync: true
     log_paths:
       - /var/log/app/*.log
 
@@ -239,6 +250,9 @@ servers:
     port: 22
     user: dba
     password: secure_pass
+    # 手动设置时间偏移（比本地慢8秒）
+    auto_time_sync: false
+    time_offset_seconds: -8
     log_paths:
       - /var/log/mysql/*.log
 
@@ -309,6 +323,9 @@ func jsonExample() string {
       "port": 22,
       "user": "appuser",
       "password": "your_password",
+      "connect_retries": 2,
+      "connect_timeout_seconds": 10,
+      "auto_time_sync": false,
       "log_paths": [
         "/var/log/app/*.log",
         "/var/log/nginx/*.log"
@@ -320,8 +337,23 @@ func jsonExample() string {
       "port": 22,
       "user": "appuser",
       "key_file": "~/.ssh/deploy_key",
+      "connect_retries": 3,
+      "connect_timeout_seconds": 15,
+      "auto_time_sync": true,
       "log_paths": [
         "/var/log/app/*.log"
+      ]
+    },
+    {
+      "name": "db-server",
+      "host": "192.168.1.201",
+      "port": 22,
+      "user": "dba",
+      "password": "secure_pass",
+      "auto_time_sync": false,
+      "time_offset_seconds": -8,
+      "log_paths": [
+        "/var/log/mysql/*.log"
       ]
     }
   ],

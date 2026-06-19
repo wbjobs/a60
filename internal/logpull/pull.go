@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,28 +19,67 @@ type RawLogEntry struct {
 	FilePath   string
 	Line       string
 	LineNumber int64
+	TimeOffset time.Duration
 }
 
 func PullLogsFromServer(ctx context.Context, server config.ServerConfig, window time.Duration) ([]RawLogEntry, error) {
 	var authMethod string
 	if server.KeyFile != "" {
-		authMethod = server.KeyFile
+		authMethod = "密钥文件: " + server.KeyFile
+	} else if server.Password != "" {
+		authMethod = "密码认证"
 	} else {
-		authMethod = server.Password
+		authMethod = "未指定"
 	}
 
-	client, err := sshclient.NewClient(server.Name, server.Host, server.Port, server.User, server.Password, server.KeyFile)
+	client, err := sshclient.NewClient(
+		server.Name,
+		server.Host,
+		server.Port,
+		server.User,
+		server.Password,
+		server.KeyFile,
+		server.ConnectRetries,
+		server.ConnectTimeout,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("[%s] 创建SSH客户端失败: %w (auth: %s)", server.Name, err, authMethod)
+		return nil, fmt.Errorf("[%s] ❌ 创建SSH客户端失败: %w (认证方式: %s)", server.Name, err, authMethod)
 	}
+
 	if err := client.Connect(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("[%s] ❌ %w", server.Name, err)
 	}
 	defer client.Close()
 
+	var timeOffset time.Duration
+	if server.AutoTimeSync {
+		fmt.Printf("[%s] 正在自动探测时间偏移...\n", server.Name)
+		offset, err := client.GetTimeOffset()
+		if err != nil {
+			fmt.Printf("[%s] ⚠  自动时间同步失败: %v，将使用手动配置或0偏移\n", server.Name, err)
+		} else {
+			timeOffset = offset
+		}
+	}
+
+	if server.TimeOffsetSec != 0 {
+		manualOffset := time.Duration(server.TimeOffsetSec) * time.Second
+		fmt.Printf("[%s] 使用手动时间偏移: %v\n", server.Name, manualOffset)
+		if server.AutoTimeSync && timeOffset != 0 {
+			fmt.Printf("[%s] 注意: 手动偏移覆盖自动探测的偏移 %v\n", server.Name, timeOffset)
+		}
+		timeOffset = manualOffset
+	}
+
 	cutoffTime := time.Now().Add(-window)
-	cutoffStr := cutoffTime.Format("2006-01-02 15:04:05")
-	fmt.Printf("[%s] 拉取 %s 之后的日志...\n", server.Name, cutoffStr)
+	adjustedCutoff := cutoffTime.Add(-timeOffset)
+	cutoffStr := adjustedCutoff.Format("2006-01-02 15:04:05")
+	if timeOffset != 0 {
+		fmt.Printf("[%s] 拉取 %s 之后的日志（本地时间 %s，已应用时间偏移 %v）...\n",
+			server.Name, cutoffStr, cutoffTime.Format("2006-01-02 15:04:05"), timeOffset)
+	} else {
+		fmt.Printf("[%s] 拉取 %s 之后的日志...\n", server.Name, cutoffStr)
+	}
 
 	var allEntries []RawLogEntry
 	var mu sync.Mutex
@@ -49,9 +89,15 @@ func PullLogsFromServer(ctx context.Context, server config.ServerConfig, window 
 		wg.Add(1)
 		go func(path string) {
 			defer wg.Done()
-			entries, err := pullFromPath(client, server, path, cutoffTime)
+			select {
+			case <-ctx.Done():
+				fmt.Printf("[%s] ⚠  拉取路径 %s 被中断\n", server.Name, path)
+				return
+			default:
+			}
+			entries, err := pullFromPath(client, server, path, adjustedCutoff, timeOffset)
 			if err != nil {
-				fmt.Printf("[%s] 警告: 拉取路径 %s 失败: %v\n", server.Name, path, err)
+				fmt.Printf("[%s] ⚠  拉取路径 %s 失败: %v\n", server.Name, path, err)
 				return
 			}
 			mu.Lock()
@@ -64,7 +110,7 @@ func PullLogsFromServer(ctx context.Context, server config.ServerConfig, window 
 	return allEntries, nil
 }
 
-func pullFromPath(client *sshclient.SSHClient, server config.ServerConfig, path string, cutoff time.Time) ([]RawLogEntry, error) {
+func pullFromPath(client *sshclient.SSHClient, server config.ServerConfig, path string, cutoff time.Time, timeOffset time.Duration) ([]RawLogEntry, error) {
 	findCmd := fmt.Sprintf(`find %s -type f -newermt "%s" 2>/dev/null`, path, cutoff.Format("2006-01-02 15:04:05"))
 	files, err := client.RunCommand(findCmd)
 	if err != nil {
@@ -85,9 +131,9 @@ func pullFromPath(client *sshclient.SSHClient, server config.ServerConfig, path 
 		default:
 		}
 
-		fileEntries, err := tailAndFilterFile(client, server.Name, server.Host, filePath, cutoff)
+		fileEntries, err := tailAndFilterFile(client, server.Name, server.Host, filePath, cutoff, timeOffset)
 		if err != nil {
-			fmt.Printf("[%s] 警告: 读取文件 %s 失败: %v\n", server.Name, filePath, err)
+			fmt.Printf("[%s] ⚠  读取文件 %s 失败: %v\n", server.Name, filePath, err)
 			continue
 		}
 		entries = append(entries, fileEntries...)
@@ -96,7 +142,7 @@ func pullFromPath(client *sshclient.SSHClient, server config.ServerConfig, path 
 	return entries, nil
 }
 
-func tailAndFilterFile(client *sshclient.SSHClient, serverName, host, filePath string, cutoff time.Time) ([]RawLogEntry, error) {
+func tailAndFilterFile(client *sshclient.SSHClient, serverName, host, filePath string, cutoff time.Time, timeOffset time.Duration) ([]RawLogEntry, error) {
 	cmd := fmt.Sprintf(`tail -n 10000 %s 2>/dev/null`, filePath)
 	output, err := client.RunCommand(cmd)
 	if err != nil {
@@ -104,12 +150,12 @@ func tailAndFilterFile(client *sshclient.SSHClient, serverName, host, filePath s
 		if err != nil {
 			return nil, err
 		}
-		return readFromReader(reader, serverName, host, filePath, cutoff)
+		return readFromReader(reader, serverName, host, filePath, cutoff, timeOffset)
 	}
-	return readFromString(output, serverName, host, filePath, cutoff)
+	return readFromString(output, serverName, host, filePath, cutoff, timeOffset)
 }
 
-func readFromString(content, serverName, host, filePath string, cutoff time.Time) ([]RawLogEntry, error) {
+func readFromString(content, serverName, host, filePath string, cutoff time.Time, timeOffset time.Duration) ([]RawLogEntry, error) {
 	var entries []RawLogEntry
 	scanner := bufio.NewScanner(strReader(content))
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024*10)
@@ -123,6 +169,7 @@ func readFromString(content, serverName, host, filePath string, cutoff time.Time
 			FilePath:   filePath,
 			Line:       line,
 			LineNumber: lineNum,
+			TimeOffset: timeOffset,
 		})
 	}
 	if err := scanner.Err(); err != nil {
@@ -131,7 +178,7 @@ func readFromString(content, serverName, host, filePath string, cutoff time.Time
 	return entries, nil
 }
 
-func readFromReader(reader io.Reader, serverName, host, filePath string, cutoff time.Time) ([]RawLogEntry, error) {
+func readFromReader(reader io.Reader, serverName, host, filePath string, cutoff time.Time, timeOffset time.Duration) ([]RawLogEntry, error) {
 	var entries []RawLogEntry
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024*10)
@@ -145,6 +192,7 @@ func readFromReader(reader io.Reader, serverName, host, filePath string, cutoff 
 			FilePath:   filePath,
 			Line:       line,
 			LineNumber: lineNum,
+			TimeOffset: timeOffset,
 		})
 	}
 	if err := scanner.Err(); err != nil {
@@ -202,35 +250,65 @@ func PullAllServers(ctx context.Context, cfg *config.Config) ([]RawLogEntry, err
 	var allEntries []RawLogEntry
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	errCh := make(chan error, len(cfg.Servers))
+
+	successCount := 0
+	failCount := 0
+	totalServers := len(cfg.Servers)
+
+	fmt.Println()
+	fmt.Println(strings.Repeat("=", 80))
+	fmt.Printf("  开始从 %d 台服务器拉取日志（时间窗口: %d 分钟）\n", totalServers, cfg.TimeWindow)
+	fmt.Println(strings.Repeat("=", 80))
+	fmt.Println()
 
 	for _, server := range cfg.Servers {
 		wg.Add(1)
 		go func(s config.ServerConfig) {
 			defer wg.Done()
+
+			select {
+			case <-ctx.Done():
+				fmt.Printf("[%s] ⚠  任务被中断，跳过\n", s.Name)
+				return
+			default:
+			}
+
+			fmt.Printf("[%s] 正在连接 %s:%d...\n", s.Name, s.Host, s.Port)
 			entries, err := PullLogsFromServer(ctx, s, window)
 			if err != nil {
-				errCh <- err
+				fmt.Println()
+				fmt.Printf("❌ [%s] 拉取失败: %v\n", s.Name, err)
+				fmt.Println()
+				mu.Lock()
+				failCount++
+				mu.Unlock()
 				return
 			}
 			mu.Lock()
 			allEntries = append(allEntries, entries...)
+			successCount++
 			mu.Unlock()
-			fmt.Printf("[%s] 拉取完成，共 %d 条原始日志\n", s.Name, len(entries))
+			fmt.Printf("✅ [%s] 拉取完成，共 %d 条原始日志\n", s.Name, len(entries))
 		}(server)
 	}
 
 	wg.Wait()
-	close(errCh)
 
-	hasError := false
-	for err := range errCh {
-		fmt.Printf("错误: %v\n", err)
-		hasError = true
+	fmt.Println()
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Printf("  拉取完成 | 成功: %d/%d | 失败: %d/%d | 总日志: %d 条\n",
+		successCount, totalServers, failCount, totalServers, len(allEntries))
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println()
+
+	if failCount > 0 && successCount == 0 {
+		return nil, fmt.Errorf("所有 %d 台服务器拉取日志全部失败", totalServers)
 	}
 
-	if len(allEntries) == 0 && hasError {
-		return nil, fmt.Errorf("所有服务器拉取日志失败")
+	if failCount > 0 {
+		fmt.Printf("⚠  注意: %d 台服务器拉取失败，但已获取 %d 台服务器的数据，继续处理...\n",
+			failCount, successCount)
+		fmt.Println()
 	}
 
 	return allEntries, nil

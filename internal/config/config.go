@@ -11,13 +11,17 @@ import (
 )
 
 type ServerConfig struct {
-	Name     string `yaml:"name" json:"name"`
-	Host     string `yaml:"host" json:"host"`
-	Port     int    `yaml:"port" json:"port"`
-	User     string `yaml:"user" json:"user"`
-	Password string `yaml:"password,omitempty" json:"password,omitempty"`
-	KeyFile  string `yaml:"key_file,omitempty" json:"key_file,omitempty"`
-	LogPaths []string `yaml:"log_paths" json:"log_paths"`
+	Name            string   `yaml:"name" json:"name"`
+	Host            string   `yaml:"host" json:"host"`
+	Port            int      `yaml:"port" json:"port"`
+	User            string   `yaml:"user" json:"user"`
+	Password        string   `yaml:"password,omitempty" json:"password,omitempty"`
+	KeyFile         string   `yaml:"key_file,omitempty" json:"key_file,omitempty"`
+	LogPaths        []string `yaml:"log_paths" json:"log_paths"`
+	TimeOffsetSec   int      `yaml:"time_offset_seconds,omitempty" json:"time_offset_seconds,omitempty"`
+	AutoTimeSync    bool     `yaml:"auto_time_sync,omitempty" json:"auto_time_sync,omitempty"`
+	ConnectRetries  int      `yaml:"connect_retries,omitempty" json:"connect_retries,omitempty"`
+	ConnectTimeout  int      `yaml:"connect_timeout_seconds,omitempty" json:"connect_timeout_seconds,omitempty"`
 }
 
 type TimeFormat struct {
@@ -115,6 +119,12 @@ func validateAndSetDefaults(cfg *Config) error {
 		}
 		if len(s.LogPaths) == 0 {
 			s.LogPaths = []string{"/var/log/app/*.log"}
+		}
+		if s.ConnectRetries <= 0 {
+			s.ConnectRetries = 2
+		}
+		if s.ConnectTimeout <= 0 {
+			s.ConnectTimeout = 10
 		}
 	}
 

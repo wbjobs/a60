@@ -19,6 +19,10 @@ servers:
     port: 22
     user: appuser
     password: your_password_here
+    connect_retries: 2
+    connect_timeout_seconds: 10
+    auto_time_sync: false
+    time_offset_seconds: 0
     log_paths:
       - /var/log/app/*.log
       - /var/log/nginx/*.log
@@ -28,6 +32,9 @@ servers:
     port: 22
     user: appuser
     key_file: ~/.ssh/deploy_key
+    connect_retries: 3
+    connect_timeout_seconds: 15
+    auto_time_sync: true
     log_paths:
       - /var/log/app/*.log
 
@@ -36,6 +43,10 @@ servers:
     port: 22
     user: dba
     password: secure_password
+    connect_retries: 2
+    connect_timeout_seconds: 10
+    auto_time_sync: false
+    time_offset_seconds: -8
     log_paths:
       - /var/log/mysql/*.log
 
